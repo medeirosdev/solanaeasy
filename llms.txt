@@ -1,109 +1,324 @@
-# SolanaEasy Python SDK — API Reference for LLMs and AI Assistants
+# SolanaEasy Python SDK — Machine-Readable API Reference
 
-## What it is
-A Python SDK that abstracts Solana blockchain payments into a Stripe-like interface.
-Developers call `create_payment()` without knowing blockchain exists.
+This file is part of the solanaeasy package and is intended for consumption
+by AI assistants, LLMs, and code generation tools.
 
-## Install
-```
-pip install solanaeasy
-```
+It describes the complete public API surface of the SDK in a compact,
+unambiguous format. Load this file before answering questions about solanaeasy
+or generating code that uses it.
 
-## Core Usage
+Repository: https://github.com/medeirosdev/solanaeasy
+PyPI: https://pypi.org/project/solanaeasy/
+Docs: see README.md in this repository
+
+
+## Package identity
+
+name: solanaeasy
+version: 0.1.0
+language: Python 3.11+
+install: pip install solanaeasy
+install with Solana network access: pip install solanaeasy[solana]
+
+
+## Primary import
+
 ```python
-from solanaeasy import SolanaEasy
-
-sdk = SolanaEasy(api_key="sk_test_...")
-session = sdk.create_payment(amount=50.00, currency="USDC", order_id="order_123")
-status = sdk.check_status(session.session_id)
-status = sdk.wait_for_confirmation(session.session_id, timeout=120)
+from solanaeasy import SolanaEasy          # synchronous client
+from solanaeasy import AsyncSolanaEasy     # async client (identical interface)
 ```
 
-## Async Usage
+
+## SolanaEasy constructor
+
 ```python
-from solanaeasy import AsyncSolanaEasy
-
-async with AsyncSolanaEasy(api_key="sk_...") as sdk:
-    session = await sdk.create_payment(amount=50.00, order_id="order_123")
-    status = await sdk.wait_for_confirmation(session.session_id)
+SolanaEasy(
+    api_key: str | None = None,          # reads SOLANAEASY_API_KEY if omitted
+    network: str = "devnet",             # "devnet" | "mainnet-beta"
+    base_url: str | None = None,         # reads SOLANAEASY_BASE_URL if omitted
+    timeout: float = 30.0,
+    webhook_secret: str | None = None,   # reads SOLANAEASY_WEBHOOK_SECRET if omitted
+)
 ```
 
-## All Methods
+AsyncSolanaEasy accepts identical parameters. Use as async context manager.
 
-### SolanaEasy (sync) / AsyncSolanaEasy (async — same interface with await)
 
-- `create_payment(amount: float, order_id: str, currency: str = "USDC", description: str = "", expires_in: int = 900, idempotency_key: str | None = None) -> PaymentSession`
-- `check_status(session_id: str) -> PaymentStatus`
-- `wait_for_confirmation(session_id: str, timeout: int = 120, poll_interval: float = 2.0, on_update: Callable | None = None) -> PaymentStatus`
-- `list_payments(status: str | None = None, limit: int = 20, offset: int = 0) -> list[PaymentSession]`
-- `register_webhook(url: str) -> bool`
-- `verify_webhook_signature(payload: bytes, signature: str) -> WebhookEvent`
-- `process_webhook(payload: bytes, signature: str) -> WebhookEvent`
-- `on(event_type: str) -> Callable` — decorator for webhook handlers
-- `refund(session_id: str) -> PaymentStatus` — Phase 4, raises NotImplementedError currently
+## Methods — SolanaEasy (sync)
 
-## Return Types
+All methods on AsyncSolanaEasy are identical but return coroutines (use await).
 
-### PaymentSession
-- session_id: str
-- payment_url: str
-- amount: float (> 0)
-- currency: str ("USDC")
-- order_id: str
-- description: str
-- state: "CREATED" | "PENDING" | "CONFIRMED" | "FAILED" | "EXPIRED"
-- created_at: datetime
-- expires_at: datetime
-- is_confirmed: bool (property)
-- is_expired: bool (property)
+### create_payment
 
-### PaymentStatus
-- session_id: str
-- state: "CREATED" | "PENDING" | "CONFIRMED" | "FAILED" | "EXPIRED"
-- human_message: str (plain English description)
-- tx_hash: str | None (Solana transaction hash, available when CONFIRMED)
-- confirmed_at: datetime | None
-- confirmation_time_ms: int | None
-- error_code: str | None (on-chain error code, available when FAILED)
+```python
+sdk.create_payment(
+    amount: float,                     # required, must be > 0
+    order_id: str,                     # required, must not be empty
+    currency: str = "USDC",
+    description: str = "",
+    expires_in: int = 900,             # seconds until expiry, default 15 min
+    idempotency_key: str | None = None,
+) -> PaymentSession
+```
 
-### WebhookEvent
-- event_type: "payment.confirmed" | "payment.failed" | "payment.expired" | "payment.pending"
-- session_id: str
-- timestamp: datetime
-- data: PaymentStatus
+Sends Idempotency-Key header when idempotency_key is provided.
+Same key on repeated calls returns the original session without creating a new charge.
 
-## Exceptions
-- `SolanaEasyError` — base class
-- `AuthenticationError` — invalid API key
-- `PaymentError` — generic payment failure
-  - `InsufficientFunds` — customer wallet has no balance
-  - `TransactionExpired` — blockhash expired before confirmation
-  - `NetworkCongestion` — Solana network congestion / timeout
-- `SessionNotFoundError` — session_id not found
-- `WebhookError` — invalid signature or malformed payload
-- `RateLimitError` — too many requests (has `.retry_after: int`)
-- `WaitTimeout` — wait_for_confirmation() exceeded timeout (has `.last_status: PaymentStatus`, `.timeout: int`)
+### check_status
 
-## Configuration
+```python
+sdk.check_status(session_id: str) -> PaymentStatus
+```
 
-Constructor parameters:
-- `api_key: str` — from SolanaEasy dashboard (or SOLANAEASY_API_KEY env var)
-- `network: str` — "devnet" (default) or "mainnet-beta"
-- `base_url: str` — backend URL (or SOLANAEASY_BASE_URL env var)
-- `timeout: float` — HTTP timeout in seconds (default: 30)
-- `webhook_secret: str` — for webhook verification (or SOLANAEASY_WEBHOOK_SECRET env var)
+### wait_for_confirmation
 
-## Webhook Signature Format
-Header: `X-SolanaEasy-Signature: t=<unix_timestamp>,v1=<hmac_sha256_hex>`
-Algorithm: HMAC-SHA256, signed payload = `"{timestamp}.{raw_body}"`
-Replay attack protection: signatures older than 300s are rejected
+```python
+sdk.wait_for_confirmation(
+    session_id: str,
+    timeout: int = 120,                # seconds before raising WaitTimeout
+    poll_interval: float = 2.0,
+    on_update: Callable[[PaymentStatus], None] | None = None,
+) -> PaymentStatus
+```
 
-## Idempotency
-Pass `idempotency_key` to `create_payment()` to prevent duplicate charges.
-Sent as HTTP header: `Idempotency-Key: <key>`
-Same key + same params = returns original session (no new charge created)
+Blocks until state is CONFIRMED, FAILED, or EXPIRED.
+Raises WaitTimeout if timeout is reached before a terminal state.
+on_update is called each time the state changes.
+
+### list_payments
+
+```python
+sdk.list_payments(
+    status: str | None = None,         # filter by state
+    limit: int = 20,
+    offset: int = 0,
+) -> list[PaymentSession]
+```
+
+### register_webhook
+
+```python
+sdk.register_webhook(url: str) -> bool
+```
+
+Raises SolanaEasyError if url does not start with http:// or https://.
+
+### verify_webhook_signature
+
+```python
+sdk.verify_webhook_signature(
+    payload: bytes,
+    signature: str,                    # value of X-SolanaEasy-Signature header
+) -> WebhookEvent
+```
+
+Raises WebhookError if signature is invalid or older than 300 seconds.
+Raises SolanaEasyError if webhook_secret is not configured.
+
+Signature format: "t=<unix_timestamp>,v1=<hmac_sha256_hex>"
+Signed payload: f"{timestamp}.".encode() + raw_body
+
+### process_webhook
+
+```python
+sdk.process_webhook(
+    payload: bytes,
+    signature: str,
+) -> WebhookEvent
+```
+
+Calls verify_webhook_signature, then dispatches to all handlers registered
+via @sdk.on() for the event's event_type. Returns the parsed WebhookEvent.
+
+### on (decorator)
+
+```python
+@sdk.on("payment.confirmed")
+def handler(event: WebhookEvent) -> None:
+    ...
+```
+
+Valid event_type values: "payment.confirmed", "payment.failed",
+"payment.expired", "payment.pending"
+
+### refund
+
+```python
+sdk.refund(session_id: str) -> PaymentStatus
+```
+
+Currently raises NotImplementedError. Planned for Phase 4.
+
+### close / context manager
+
+```python
+sdk.close()
+
+with SolanaEasy(api_key="...") as sdk:
+    ...
+
+async with AsyncSolanaEasy(api_key="...") as sdk:
+    ...
+```
+
+
+## Return types
+
+### PaymentSession (pydantic BaseModel, frozen)
+
+```
+session_id: str
+payment_url: str
+amount: float  (> 0)
+currency: str  (default "USDC")
+order_id: str
+description: str
+state: PaymentState
+created_at: datetime
+expires_at: datetime
+is_confirmed: bool  (property, state == "CONFIRMED")
+is_expired: bool    (property, now > expires_at)
+```
+
+### PaymentStatus (pydantic BaseModel, frozen)
+
+```
+session_id: str
+state: PaymentState
+human_message: str
+tx_hash: str | None          (set when CONFIRMED)
+confirmed_at: datetime | None
+confirmation_time_ms: int | None
+error_code: str | None        (set when FAILED)
+```
+
+### WebhookEvent (pydantic BaseModel, frozen)
+
+```
+event_type: WebhookEventType
+session_id: str
+timestamp: datetime
+data: PaymentStatus
+```
+
+### PaymentReceipt (pydantic BaseModel, frozen)
+
+```
+session_id: str
+order_id: str
+description: str
+amount: float
+currency: str
+amount_brl: float | None
+tx_hash: str
+block_number: int | None
+confirmed_at: datetime
+confirmation_time_ms: int | None
+explorer_url: str
+```
+
+
+## Type aliases
+
+```python
+PaymentState = Literal["CREATED", "PENDING", "CONFIRMED", "FAILED", "EXPIRED"]
+
+WebhookEventType = Literal[
+    "payment.confirmed",
+    "payment.failed",
+    "payment.expired",
+    "payment.pending",
+]
+```
+
+
+## State machine
+
+```
+CREATED -> PENDING -> CONFIRMED
+                   -> FAILED
+                   -> EXPIRED  (after expires_in seconds, default 900)
+```
+
+CREATED: session exists, customer has not yet opened the payment URL
+PENDING: customer opened the URL, transaction submitted to Solana
+CONFIRMED: transaction finalized on-chain
+FAILED: transaction rejected (insufficient funds, expired blockhash, etc.)
+EXPIRED: session timeout reached with no payment
+
+
+## Exception hierarchy
+
+```
+SolanaEasyError(Exception)
+  .message: str
+  .code: str | None
+
+  AuthenticationError(SolanaEasyError)
+    code: "INVALID_API_KEY"
+
+  PaymentError(SolanaEasyError)
+    InsufficientFunds(PaymentError)
+    TransactionExpired(PaymentError)
+    NetworkCongestion(PaymentError)
+
+  WaitTimeout(SolanaEasyError)
+    .last_status: PaymentStatus
+    .timeout: int
+    code: "WAIT_TIMEOUT"
+
+  SessionNotFoundError(SolanaEasyError)
+    code: "NOT_FOUND"
+
+  WebhookError(SolanaEasyError)
+    code: "INVALID_WEBHOOK_SIGNATURE" | "INVALID_WEBHOOK_PAYLOAD"
+
+  RateLimitError(SolanaEasyError)
+    .retry_after: int | None
+    code: "RATE_LIMIT"
+```
+
+
+## HTTP behavior
+
+- All requests include Authorization: Bearer <api_key>
+- Automatic exponential retry on 502, 503, 504 and TimeoutException
+- Retry delays: 1s, 2s, 4s (max 3 attempts)
+- 401 -> AuthenticationError
+- 404 -> SessionNotFoundError
+- 429 -> RateLimitError (reads Retry-After header)
+- 5xx -> SolanaEasyError with code HTTP_<status>
+
+
+## Environment variables
+
+```
+SOLANAEASY_API_KEY          string, required if not passed to constructor
+SOLANAEASY_NETWORK          "devnet" | "mainnet-beta", default "devnet"
+SOLANAEASY_BASE_URL         string, default http://localhost:8000 on devnet
+SOLANAEASY_WEBHOOK_SECRET   string, required for webhook verification
+SOLANAEASY_TIMEOUT          float seconds, default 30
+```
+
+
+## CLI commands
+
+```
+solanaeasy status <session_id>
+solanaeasy payments [--status STATE] [--limit N] [--offset N]
+solanaeasy wait <session_id> [--timeout N] [--interval N]
+solanaeasy --version
+solanaeasy --help
+```
+
+CLI reads SOLANAEASY_API_KEY from environment. Exits with code 1 on error.
+
 
 ## Network
-- Solana devnet: free testing, SOL airdrop available
-- Stablecoin: USDC on Solana (no price volatility)
-- State machine: CREATED → PENDING → CONFIRMED | FAILED | EXPIRED (15 min)
+
+Default currency: USDC on Solana (SPL token, stablecoin)
+Devnet USDC mint: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+Mainnet USDC mint: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+Devnet RPC: https://api.devnet.solana.com
+Mainnet RPC: https://api.mainnet-beta.solana.com
+Devnet SOL airdrop: free, available via request_airdrop() in _internal.solana.rpc

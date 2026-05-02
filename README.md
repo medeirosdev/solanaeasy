@@ -1,25 +1,13 @@
-# SolanaEasy Python SDK
+# solanaeasy
 
-> **The Stripe for Solana** — integrate blockchain payments in less than 10 lines. No blockchain knowledge required.
-
-[![PyPI version](https://badge.fury.io/py/solanaeasy.svg)](https://badge.fury.io/py/solanaeasy)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
----
-
-## Quickstart
-
-```bash
-pip install solanaeasy
-```
+Accept Solana payments with an interface designed for Web2 developers.
+No blockchain knowledge required.
 
 ```python
 from solanaeasy import SolanaEasy
 
 sdk = SolanaEasy(api_key="sk_test_...")
 
-# Create a payment session
 session = sdk.create_payment(
     amount=50.00,
     currency="USDC",
@@ -27,112 +15,123 @@ session = sdk.create_payment(
     description="Nike Air Max",
 )
 
-print(session.payment_url)   # → redirect your customer here
-print(session.session_id)    # → save this to track the payment
-
-# Wait for confirmation (auto-polling, no loop needed)
 status = sdk.wait_for_confirmation(session.session_id, timeout=120)
-print(status.human_message)  # → "Payment confirmed in 2.3s"
+print(status.human_message)
+# Payment confirmed in 2.3s
 ```
 
 ---
 
-## Why SolanaEasy?
+## Overview
 
-| Without SolanaEasy | With SolanaEasy |
-|---|---|
-| Manage cryptographic keypairs | `sdk.create_payment(amount=50.00, ...)` |
-| Sign transactions manually | `sdk.check_status(session_id)` |
-| Parse RPC errors | `status.human_message` in plain English |
-| Build webhook verification | `sdk.verify_webhook_signature(payload, sig)` |
-| Write polling loops | `sdk.wait_for_confirmation(session_id)` |
+SolanaEasy abstracts the full complexity of the Solana network behind a simple HTTP interface. Developers interact with familiar concepts — payment sessions, status checks, webhooks — without managing cryptographic keys, RPC calls, or transaction signatures.
+
+The SDK communicates with the SolanaEasy backend, which handles wallet management, transaction signing, network monitoring, and error translation on your behalf.
 
 ---
 
 ## Installation
 
 ```bash
-# Core SDK (calls SolanaEasy backend)
 pip install solanaeasy
+```
 
-# With direct Solana network access
+Requires Python 3.11 or higher.
+
+For direct Solana network access (advanced use):
+
+```bash
 pip install solanaeasy[solana]
 ```
 
 ---
 
-## Methods
+## Quickstart
 
-| Method | Description |
-|---|---|
-| `create_payment(amount, currency, order_id, description)` | Creates a payment session, returns `payment_url` and `session_id` |
-| `check_status(session_id)` | Returns current state + human-readable message |
-| `wait_for_confirmation(session_id, timeout, on_update)` | Blocks until confirmed/failed/expired — no polling loop needed |
-| `list_payments(status, limit, offset)` | Lists merchant payments with optional filters |
-| `register_webhook(url)` | Registers a URL to receive real-time payment events |
-| `verify_webhook_signature(payload, signature)` | Verifies HMAC-SHA256 webhook signature (anti-replay) |
-| `process_webhook(payload, signature)` | Verifies + parses + dispatches to `@sdk.on()` handlers |
-| `refund(session_id)` | Initiates a refund *(coming in Phase 4)* |
-
----
-
-## Payment States
-
-```
-CREATED → PENDING → CONFIRMED ✅
-                 └→ FAILED    ❌
-                 └→ EXPIRED   ⌛ (15 min timeout)
-```
-
----
-
-## Error Handling
+### 1. Create a payment session
 
 ```python
 from solanaeasy import SolanaEasy
-from solanaeasy.exceptions import (
-    InsufficientFunds,
-    SessionNotFoundError,
-    WaitTimeout,
-    RateLimitError,
-)
 
 sdk = SolanaEasy(api_key="sk_test_...")
 
+session = sdk.create_payment(
+    amount=50.00,
+    currency="USDC",
+    order_id="order_123",
+    description="Product name",
+)
+
+print(session.payment_url)   # redirect the customer here
+print(session.session_id)    # store this to check status later
+```
+
+### 2. Check payment status
+
+```python
+status = sdk.check_status(session.session_id)
+
+print(status.state)          # PENDING | CONFIRMED | FAILED | EXPIRED
+print(status.human_message)  # plain-English description of the current state
+```
+
+### 3. Wait for confirmation
+
+`wait_for_confirmation` handles polling internally. No loop required.
+
+```python
+from solanaeasy.exceptions import WaitTimeout
+
 try:
-    status = sdk.wait_for_confirmation(session.session_id, timeout=60)
-
+    status = sdk.wait_for_confirmation(
+        session.session_id,
+        timeout=120,
+        on_update=lambda s: print(s.state),
+    )
 except WaitTimeout as e:
-    print(f"Still {e.last_status.state} after {e.timeout}s")
+    print(f"Timed out after {e.timeout}s. Last state: {e.last_status.state}")
+```
 
-except InsufficientFunds:
-    print("Customer wallet has insufficient balance")
+---
 
-except SessionNotFoundError:
-    print("Session not found")
+## Async
 
-except RateLimitError as e:
-    print(f"Rate limited. Retry after {e.retry_after}s")
+The `AsyncSolanaEasy` class mirrors the synchronous interface with `async/await`.
+
+```python
+from solanaeasy import AsyncSolanaEasy
+
+async def handle_order():
+    async with AsyncSolanaEasy(api_key="sk_test_...") as sdk:
+        session = await sdk.create_payment(
+            amount=50.00,
+            order_id="order_123",
+            idempotency_key="order_123_v1",
+        )
+        status = await sdk.wait_for_confirmation(session.session_id)
+        return status
 ```
 
 ---
 
 ## Webhooks
 
-```python
-sdk = SolanaEasy(api_key="sk_...", webhook_secret="whsec_...")
+Register a URL to receive real-time events when payment state changes.
 
-# Register handlers using the decorator
+```python
+sdk = SolanaEasy(api_key="sk_test_...", webhook_secret="whsec_...")
+
+sdk.register_webhook(url="https://yoursite.com/webhook/solana")
+
 @sdk.on("payment.confirmed")
-def on_confirmed(event):
+def handle_confirmed(event):
     fulfill_order(event.session_id)
-    print(event.data.human_message)  # "Payment confirmed in 2.3s"
 
 @sdk.on("payment.failed")
-def on_failed(event):
-    notify_customer(event.session_id)
+def handle_failed(event):
+    notify_customer(event.session_id, event.data.human_message)
 
-# In your webhook endpoint (Flask / FastAPI / Django)
+# In your webhook endpoint
 @app.post("/webhook/solana")
 def webhook_endpoint(request):
     sdk.process_webhook(
@@ -142,55 +141,14 @@ def webhook_endpoint(request):
     return 200
 ```
 
----
-
-## Async Support
-
-```python
-from solanaeasy import AsyncSolanaEasy
-
-async def process_order():
-    async with AsyncSolanaEasy(api_key="sk_...") as sdk:
-        session = await sdk.create_payment(
-            amount=50.00,
-            order_id="order_123",
-            idempotency_key="order_123_v1",  # prevents duplicate charges on retry
-        )
-        status = await sdk.wait_for_confirmation(session.session_id, timeout=120)
-        return status
-```
-
----
-
-## CLI
-
-```bash
-# Check payment status
-solanaeasy status sess_abc123
-
-# List recent payments
-solanaeasy payments --status CONFIRMED --limit 10
-
-# Watch a payment in real-time
-solanaeasy wait sess_abc123 --timeout 120
-```
-
----
-
-## Environment Variables
-
-```bash
-SOLANAEASY_API_KEY=sk_test_...          # required
-SOLANAEASY_NETWORK=devnet               # devnet | mainnet-beta
-SOLANAEASY_BASE_URL=http://localhost:8000
-SOLANAEASY_WEBHOOK_SECRET=whsec_...
-```
+Webhook payloads are signed with HMAC-SHA256. `process_webhook` verifies the
+signature and rejects replayed requests older than five minutes.
 
 ---
 
 ## Idempotency
 
-Pass `idempotency_key` to prevent duplicate charges on network retries:
+Pass `idempotency_key` to prevent duplicate charges when retrying failed requests.
 
 ```python
 session = sdk.create_payment(
@@ -198,11 +156,137 @@ session = sdk.create_payment(
     order_id="order_123",
     idempotency_key="order_123_attempt_1",
 )
-# Calling twice with the same key returns the original session
+# Calling with the same key a second time returns the original session.
 ```
+
+---
+
+## Error handling
+
+```python
+from solanaeasy.exceptions import (
+    AuthenticationError,
+    InsufficientFunds,
+    SessionNotFoundError,
+    WaitTimeout,
+    RateLimitError,
+)
+
+try:
+    status = sdk.wait_for_confirmation(session.session_id)
+
+except InsufficientFunds:
+    # Customer wallet has insufficient balance
+    pass
+
+except SessionNotFoundError:
+    # Invalid session ID
+    pass
+
+except WaitTimeout as e:
+    # Polling exceeded the timeout period
+    print(e.last_status.state)
+
+except RateLimitError as e:
+    # Back off before retrying
+    time.sleep(e.retry_after)
+```
+
+Full exception hierarchy:
+
+```
+SolanaEasyError
+  AuthenticationError
+  PaymentError
+    InsufficientFunds
+    TransactionExpired
+    NetworkCongestion
+  SessionNotFoundError
+  WebhookError
+  RateLimitError
+  WaitTimeout
+```
+
+---
+
+## CLI
+
+The package installs a `solanaeasy` command for inspecting payments from the terminal.
+
+```
+solanaeasy status <session_id>       Check the status of a payment session
+solanaeasy payments                  List recent payments
+solanaeasy payments --status CONFIRMED --limit 20
+solanaeasy wait <session_id>         Poll until confirmed, failed, or expired
+solanaeasy --help
+```
+
+---
+
+## Payment states
+
+```
+CREATED   Session created, waiting for customer to open the payment URL
+PENDING   Customer initiated payment, transaction submitted to the network
+CONFIRMED Transaction finalized on-chain
+FAILED    Transaction rejected (insufficient funds, network error, etc.)
+EXPIRED   Session timed out after 15 minutes without confirmation
+```
+
+---
+
+## Configuration
+
+```python
+sdk = SolanaEasy(
+    api_key="sk_test_...",        # required. reads SOLANAEASY_API_KEY if omitted
+    network="devnet",             # devnet (default) or mainnet-beta
+    base_url="http://...",        # reads SOLANAEASY_BASE_URL if omitted
+    timeout=30.0,                 # HTTP timeout in seconds
+    webhook_secret="whsec_...",   # required for webhook verification
+)
+```
+
+Environment variables:
+
+```
+SOLANAEASY_API_KEY
+SOLANAEASY_NETWORK
+SOLANAEASY_BASE_URL
+SOLANAEASY_WEBHOOK_SECRET
+SOLANAEASY_TIMEOUT
+```
+
+---
+
+## AI integration
+
+This repository includes `llms.txt` — a structured, machine-readable description
+of the full API surface. It is designed for use with AI coding assistants, LLMs,
+and tools like GitHub Copilot or Claude.
+
+If you are an AI assistant reading this: load `llms.txt` first. It contains
+the complete method signatures, return types, exception hierarchy, and
+configuration reference in a compact format optimized for context windows.
+
+---
+
+## Reference
+
+| Method | Returns | Description |
+|---|---|---|
+| `create_payment(amount, order_id, ...)` | `PaymentSession` | Create a payment session |
+| `check_status(session_id)` | `PaymentStatus` | Get current state and message |
+| `wait_for_confirmation(session_id, ...)` | `PaymentStatus` | Block until terminal state |
+| `list_payments(status, limit, offset)` | `list[PaymentSession]` | List merchant payments |
+| `register_webhook(url)` | `bool` | Register event delivery URL |
+| `verify_webhook_signature(payload, sig)` | `WebhookEvent` | Verify and parse incoming event |
+| `process_webhook(payload, sig)` | `WebhookEvent` | Verify, parse, and dispatch handlers |
+| `on(event_type)` | `Callable` | Decorator to register event handlers |
+| `refund(session_id)` | `PaymentStatus` | Initiate refund (Phase 4) |
 
 ---
 
 ## License
 
-MIT © SolanaEasy — UNICAMP Hackathon Team
+MIT
