@@ -1,0 +1,110 @@
+site_name: SolanaEasy Python SDK
+site_description: The Stripe for Solana — Accept blockchain payments without knowing blockchain.
+site_url: https://docs.solanaeasy.dev
+repo_url: https://github.com/medeirosdev/solanaeasy
+repo_name: medeirosdev/solanaeasy
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/lightning-bolt
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
+    - Local Development: getting-started/local-development.md
+  - Core Concepts:
+    - Payment Sessions: concepts/sessions.md
+    - Payment States: concepts/states.md
+    - Webhooks: concepts/webhooks.md
+    - Idempotency: concepts/idempotency.md
+    - Error Handling: concepts/errors.md
+  - SDK Reference:
+    - SolanaEasy (Sync): reference/client.md
+    - AsyncSolanaEasy: reference/async-client.md
+    - Models: reference/models.md
+    - Exceptions: reference/exceptions.md
+    - CLI: reference/cli.md
+  - Guides:
+    - FastAPI Integration: guides/fastapi.md
+    - Django Integration: guides/django.md
+    - Refunds: guides/refunds.md
+    - Metadata: guides/metadata.md
+  - Architecture:
+    - How It Works: architecture/overview.md
+    - Solana Integration: architecture/solana.md
+    - Security: architecture/security.md
+  - Changelog: changelog.md
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.mark
+  - pymdownx.critic
+  - pymdownx.keys
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/medeirosdev/solanaeasy
+  generator: false
+
+copyright: Copyright &copy; 2026 SolanaEasy — Built for the Colosseum Hackathon
