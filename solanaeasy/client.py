@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 from solanaeasy._internal.http import HttpClient
 from solanaeasy._internal.webhook import verify_signature
 from solanaeasy.exceptions import SolanaEasyError, WaitTimeout, WebhookError
-from solanaeasy.models import PaymentSession, PaymentState, PaymentStatus, WebhookEvent
+from solanaeasy.models import PaymentReceipt, PaymentSession, PaymentState, PaymentStatus, WebhookEvent
 
 load_dotenv()
 
@@ -100,6 +100,7 @@ class SolanaEasy:
         description: str = "",
         expires_in: int = 900,
         idempotency_key: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> PaymentSession:
         """
         Cria uma nova sessão de pagamento.
@@ -112,6 +113,8 @@ class SolanaEasy:
             expires_in:       Segundos até a sessão expirar (padrão: 900 = 15 min).
             idempotency_key:  Chave única para evitar cobrança dupla em retries.
                               Chamadas repetidas com a mesma chave retornam a sessão original.
+            metadata:         Dicionário de metadados customizados (ex: {"user_id": "123", "sku": "NIKE-001"}).
+                              Armazenados no backend e devolvidos em check_status() e webhooks.
 
         Retorna:
             PaymentSession com session_id e payment_url.
@@ -122,6 +125,7 @@ class SolanaEasy:
                 order_id="pedido_123",
                 description="Tênis Nike Air Max",
                 idempotency_key="pedido_123_v1",
+                metadata={"user_id": "u_42", "sku": "NIKE-AM-001"},
             )
             redirect_user_to(session.payment_url)
         """
@@ -134,15 +138,19 @@ class SolanaEasy:
         if idempotency_key:
             extra_headers["Idempotency-Key"] = idempotency_key
 
+        body: dict[str, Any] = {
+            "amount": amount,
+            "currency": currency,
+            "order_id": order_id,
+            "description": description,
+            "expires_in": expires_in,
+        }
+        if metadata:
+            body["metadata"] = metadata
+
         data = self._http.post(
             "/sessions",
-            json={
-                "amount": amount,
-                "currency": currency,
-                "order_id": order_id,
-                "description": description,
-                "expires_in": expires_in,
-            },
+            json=body,
             extra_headers=extra_headers or None,
         )
         return PaymentSession(**data)
@@ -255,12 +263,92 @@ class SolanaEasy:
     def refund(self, session_id: str) -> PaymentStatus:
         """
         Inicia o processo de estorno de um pagamento confirmado.
-        Implementado na Fase 4.
+
+        Somente sessões com state == "CONFIRMED" podem ser estornadas.
+        A operação transfere os fundos de volta para a carteira do pagador.
+
+        Parâmetros:
+            session_id: ID da sessão confirmada.
+
+        Retorna:
+            PaymentStatus com state == "REFUNDED".
+
+        Exemplo:
+            status = sdk.refund("sess_abc123")
+            print(status.human_message)  # "Refund processed."
         """
-        raise NotImplementedError(
-            "refund() será implementado na Fase 4. "
-            "Acompanhe: https://github.com/solanaeasy/solanaeasy-python"
-        )
+        if not session_id.strip():
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
+        data = self._http.post(f"/sessions/{session_id}/refund")
+        return PaymentStatus(**data)
+
+    def cancel_session(self, session_id: str) -> PaymentStatus:
+        """
+        Cancela uma sessão de pagamento antes que o cliente pague.
+
+        Somente sessões com state == "CREATED" ou "PENDING" podem ser canceladas.
+        Após o cancelamento, a sessão não aceita mais depósitos.
+
+        Parâmetros:
+            session_id: ID da sessão a cancelar.
+
+        Retorna:
+            PaymentStatus com state == "CANCELLED".
+
+        Exemplo:
+            status = sdk.cancel_session("sess_abc123")
+            print(status.state)  # "CANCELLED"
+        """
+        if not session_id.strip():
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
+        data = self._http.post(f"/sessions/{session_id}/cancel")
+        return PaymentStatus(**data)
+
+    def get_receipt(self, session_id: str) -> PaymentReceipt:
+        """
+        Obtém o recibo detalhado de um pagamento confirmado.
+
+        Disponível apenas para sessões com state == "CONFIRMED".
+        Inclui tx_hash, explorer_url, tempo de confirmação e valor em BRL.
+
+        Parâmetros:
+            session_id: ID da sessão confirmada.
+
+        Retorna:
+            PaymentReceipt com todos os dados da transação.
+
+        Exemplo:
+            receipt = sdk.get_receipt("sess_abc123")
+            print(receipt.explorer_url)   # Link para o Solana Explorer
+            print(receipt.tx_hash)        # Hash da transação
+        """
+        if not session_id.strip():
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
+        data = self._http.get(f"/sessions/{session_id}/receipt")
+        return PaymentReceipt(**data)
+
+    def get_wallet_balance(self, session_id: str) -> dict[str, Any]:
+        """
+        Consulta o saldo atual da carteira Solana gerada para uma sessão.
+
+        Útil para verificar se o depósito foi feito ou para debugging.
+
+        Parâmetros:
+            session_id: ID da sessão.
+
+        Retorna:
+            Dicionário com:
+            - wallet_public_key (str): Endereço da carteira.
+            - sol_balance (float): Saldo em SOL.
+            - network (str): Rede (devnet ou mainnet-beta).
+
+        Exemplo:
+            info = sdk.get_wallet_balance("sess_abc123")
+            print(f"Saldo: {info['sol_balance']} SOL")
+        """
+        if not session_id.strip():
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
+        return self._http.get(f"/sessions/{session_id}/balance")
 
     # ── Webhooks ───────────────────────────────────────────────────────────────
 

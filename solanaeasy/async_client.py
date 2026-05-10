@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from solanaeasy._internal.async_http import AsyncHttpClient
 from solanaeasy._internal.webhook import verify_signature
 from solanaeasy.exceptions import SolanaEasyError, WaitTimeout, WebhookError
-from solanaeasy.models import PaymentSession, PaymentState, PaymentStatus, WebhookEvent
+from solanaeasy.models import PaymentReceipt, PaymentSession, PaymentState, PaymentStatus, WebhookEvent
 
 load_dotenv()
 
@@ -96,26 +96,31 @@ class AsyncSolanaEasy:
         description: str = "",
         expires_in: int = 900,
         idempotency_key: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> PaymentSession:
-        """Cria uma nova sessão de pagamento. Veja SolanaEasy.create_payment() para documentação."""
+        """Cria uma nova sessao de pagamento. Veja SolanaEasy.create_payment() para documentacao."""
         if amount <= 0:
             raise SolanaEasyError("O valor deve ser maior que zero.", code="INVALID_AMOUNT")
         if not order_id.strip():
-            raise SolanaEasyError("order_id não pode ser vazio.", code="INVALID_ORDER_ID")
+            raise SolanaEasyError("order_id nao pode ser vazio.", code="INVALID_ORDER_ID")
 
         extra_headers = {}
         if idempotency_key:
             extra_headers["Idempotency-Key"] = idempotency_key
 
+        body: dict[str, Any] = {
+            "amount": amount,
+            "currency": currency,
+            "order_id": order_id,
+            "description": description,
+            "expires_in": expires_in,
+        }
+        if metadata:
+            body["metadata"] = metadata
+
         data = await self._http.post(
             "/sessions",
-            json={
-                "amount": amount,
-                "currency": currency,
-                "order_id": order_id,
-                "description": description,
-                "expires_in": expires_in,
-            },
+            json=body,
             extra_headers=extra_headers or None,
         )
         return PaymentSession(**data)
@@ -195,6 +200,33 @@ class AsyncSolanaEasy:
             )
         await self._http.post("/webhooks", json={"url": url})
         return True
+
+    async def refund(self, session_id: str) -> PaymentStatus:
+        """Initiate a refund for a CONFIRMED session. See SolanaEasy.refund()."""
+        if not session_id.strip():
+            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+        data = await self._http.post(f"/sessions/{session_id}/refund")
+        return PaymentStatus(**data)
+
+    async def cancel_session(self, session_id: str) -> PaymentStatus:
+        """Cancel a session in CREATED or PENDING state. See SolanaEasy.cancel_session()."""
+        if not session_id.strip():
+            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+        data = await self._http.post(f"/sessions/{session_id}/cancel")
+        return PaymentStatus(**data)
+
+    async def get_receipt(self, session_id: str) -> PaymentReceipt:
+        """Get a formatted receipt for a CONFIRMED session. See SolanaEasy.get_receipt()."""
+        if not session_id.strip():
+            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+        data = await self._http.get(f"/sessions/{session_id}/receipt")
+        return PaymentReceipt(**data)
+
+    async def get_wallet_balance(self, session_id: str) -> dict[str, Any]:
+        """Check SOL balance of the session wallet. See SolanaEasy.get_wallet_balance()."""
+        if not session_id.strip():
+            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+        return await self._http.get(f"/sessions/{session_id}/balance")
 
     # ── Webhooks ───────────────────────────────────────────────────────────────
 

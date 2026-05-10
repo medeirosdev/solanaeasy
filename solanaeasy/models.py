@@ -13,7 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # Tipo dos estados possíveis de uma sessão de pagamento
-PaymentState = Literal["CREATED", "PENDING", "CONFIRMED", "FAILED", "EXPIRED"]
+PaymentState = Literal["CREATED", "PENDING", "CONFIRMED", "FAILED", "EXPIRED", "CANCELLED", "REFUNDED"]
 
 # Tipo dos eventos de webhook
 WebhookEventType = Literal[
@@ -44,6 +44,14 @@ class PaymentSession(BaseModel):
     order_id: str = Field(description="ID do pedido no sistema do lojista")
     description: str = Field(default="", description="Descrição do produto/serviço")
     state: PaymentState = Field(default="CREATED", description="Estado atual da sessão")
+    wallet_public_key: str | None = Field(
+        default=None,
+        description="Endereço da carteira Solana gerada para este pagamento",
+    )
+    metadata: dict[str, str] | None = Field(
+        default=None,
+        description="Metadados customizados do lojista (ex: user_id, sku)",
+    )
     created_at: datetime = Field(description="Data/hora de criação da sessão")
     expires_at: datetime = Field(description="Data/hora de expiração (default: +15min)")
 
@@ -75,6 +83,10 @@ class PaymentStatus(BaseModel):
     state: PaymentState = Field(description="Estado atual")
     human_message: str = Field(
         description="Mensagem legível descrevendo o estado"
+    )
+    wallet_public_key: str | None = Field(
+        default=None,
+        description="Endereço da carteira Solana gerada para este pagamento",
     )
 
     # Disponíveis apenas quando state == "CONFIRMED"

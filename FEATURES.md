@@ -1,75 +1,86 @@
-# SolanaEasy Python SDK — Funcionalidades
+# SolanaEasy Python SDK -- Features
 
-> Documento vivo. Atualizado a cada nova feature implementada.
-> Última atualização: 2026-05-02
+> Living document. Updated with each new feature.
+> Last update: 2026-05-05
 
 ---
 
-## Status das Features
+## Feature Status
 
-| Feature | Status | Módulo |
+| Feature | Status | Module |
 |---|---|---|
-| `create_payment()` | ✅ Implementado | `client.py` |
-| `check_status()` | ✅ Implementado | `client.py` |
-| `list_payments()` | ✅ Implementado | `client.py` |
-| `register_webhook()` | ✅ Implementado | `client.py` |
-| `refund()` | 🔜 Fase 4 | `client.py` |
-| `wait_for_confirmation()` | ✅ Implementado | `client.py` |
-| Verificação de assinatura de webhook | ✅ Implementado | `client.py` + `_internal/webhook.py` |
-| Idempotency key | ✅ Implementado | `client.py` |
-| `@sdk.on()` decorator de webhook | ✅ Implementado | `client.py` |
-| `AsyncSolanaEasy` | ✅ Implementado | `async_client.py` |
-| CLI (`solanaeasy status`, `solanaeasy payments`) | ✅ Implementado | `cli.py` |
-| `py.typed` (suporte mypy completo) | ✅ Implementado | `py.typed` |
+| `create_payment()` | Implemented | `client.py` |
+| `check_status()` | Implemented | `client.py` |
+| `list_payments()` | Implemented | `client.py` |
+| `wait_for_confirmation()` | Implemented | `client.py` |
+| `register_webhook()` | Implemented | `client.py` |
+| `verify_webhook_signature()` | Implemented | `client.py` + `_internal/webhook.py` |
+| `process_webhook()` + `@sdk.on()` | Implemented | `client.py` |
+| `refund()` | Implemented | `client.py` |
+| `cancel_session()` | Implemented | `client.py` |
+| `get_receipt()` | Implemented | `client.py` |
+| `get_wallet_balance()` | Implemented | `client.py` |
+| Custom metadata | Implemented | `client.py` + `models.py` |
+| Idempotency key | Implemented | `client.py` |
+| `AsyncSolanaEasy` | Implemented | `async_client.py` |
+| CLI (`solanaeasy status`, `payments`, `wait`) | Implemented | `cli.py` |
+| `py.typed` (mypy support) | Implemented | `py.typed` |
+| Wallet public key in responses | Implemented | `models.py` |
+| CANCELLED / REFUNDED states | Implemented | `models.py` |
 
 ---
 
-## Detalhes das Features
+## Feature Details
 
 ---
 
-### ✅ `create_payment()` — Criar sessão de pagamento
+### `create_payment()` -- Create a payment session
 
 ```python
 session = sdk.create_payment(
     amount=50.00,
     currency="USDC",
     order_id="pedido_123",
-    description="Tênis Nike Air Max",
-    idempotency_key="pedido_123_v1",  # ← previne duplicatas
+    description="Nike Air Max",
+    idempotency_key="pedido_123_v1",
+    metadata={"user_id": "u_42", "sku": "NIKE-AM-001"},
 )
-print(session.payment_url)   # URL para o cliente pagar
-print(session.session_id)    # ID para rastrear depois
+print(session.payment_url)        # URL for the customer to pay
+print(session.session_id)         # ID to track later
+print(session.wallet_public_key)  # Solana deposit address
+print(session.metadata)           # Your custom metadata
 ```
 
-**Parâmetros:**
-- `amount` (float, obrigatório) — valor a cobrar, deve ser > 0
-- `currency` (str, padrão `"USDC"`) — moeda stablecoin
-- `order_id` (str, obrigatório) — ID do pedido no sistema do lojista
-- `description` (str, opcional) — aparece no recibo
-- `expires_in` (int, padrão `900`) — segundos até expirar
-- `idempotency_key` (str, opcional) — chave única para evitar cobrança dupla em retry
+**Parameters:**
+- `amount` (float, required) -- value to charge, must be > 0
+- `currency` (str, default `"USDC"`) -- stablecoin currency
+- `order_id` (str, required) -- order ID in the merchant's system
+- `description` (str, optional) -- appears on the receipt
+- `expires_in` (int, default `900`) -- seconds until expiry
+- `idempotency_key` (str, optional) -- unique key to prevent duplicate charges
+- `metadata` (dict, optional) -- custom key-value pairs stored server-side
 
-**Retorna:** `PaymentSession`
+**Returns:** `PaymentSession`
 
 ---
 
-### ✅ `check_status()` — Verificar status
+### `check_status()` -- Check payment status
 
 ```python
 status = sdk.check_status(session.session_id)
-print(status.state)          # "PENDING" | "CONFIRMED" | "FAILED" | "EXPIRED"
-print(status.human_message)  # "Pagamento confirmado em 2.3s"
-print(status.tx_hash)        # hash da transação (se confirmada)
+print(status.state)               # "PENDING" | "CONFIRMED" | "FAILED" | "EXPIRED"
+print(status.human_message)       # "Payment confirmed on the Solana Devnet."
+print(status.wallet_public_key)   # Deposit address
+print(status.tx_hash)             # Transaction hash (if confirmed)
 ```
 
-**Retorna:** `PaymentStatus`
+**Returns:** `PaymentStatus`
 
 ---
 
-### ✅ `wait_for_confirmation()` — Aguardar confirmação
+### `wait_for_confirmation()` -- Wait for payment
 
-Bloqueia até o pagamento ser confirmado, falhar ou expirar. Elimina a necessidade do dev fazer polling manual.
+Blocks until the payment reaches a terminal state. No manual polling loop needed.
 
 ```python
 try:
@@ -77,22 +88,93 @@ try:
         session.session_id,
         timeout=120,
         poll_interval=2.0,
-        on_update=lambda s: print(f"Estado: {s.state}"),
+        on_update=lambda s: print(f"State: {s.state}"),
     )
-    print(status.human_message)  # "Pagamento confirmado em 2.3s"
-
+    print(status.human_message)
 except WaitTimeout as e:
-    print(f"Timeout! Último estado: {e.last_status.state}")
+    print(f"Timeout! Last state: {e.last_status.state}")
 ```
 
-**Estados terminais:** `CONFIRMED`, `FAILED`, `EXPIRED`
-**Lança:** `WaitTimeout` se o `timeout` for atingido
+**Terminal states:** `CONFIRMED`, `FAILED`, `EXPIRED`
+**Raises:** `WaitTimeout` if timeout is reached
 
 ---
 
-### ✅ Idempotency Key — Prevenir pagamento duplicado
+### `cancel_session()` -- Cancel before payment
 
-Chamadas repetidas com a mesma chave retornam a sessão já criada.
+```python
+status = sdk.cancel_session(session.session_id)
+print(status.state)  # "CANCELLED"
+```
+
+Only sessions in CREATED or PENDING state can be cancelled.
+Raises HTTP 409 if the session has already been confirmed, failed, or expired.
+
+---
+
+### `refund()` -- Refund a confirmed payment
+
+```python
+status = sdk.refund(session.session_id)
+print(status.state)          # "REFUNDED"
+print(status.human_message)  # "Payment refunded by merchant."
+```
+
+Only CONFIRMED sessions can be refunded.
+Raises HTTP 409 for any other state.
+
+---
+
+### `get_receipt()` -- Get payment receipt
+
+```python
+receipt = sdk.get_receipt(session.session_id)
+print(receipt.explorer_url)       # Link to Solana Explorer
+print(receipt.tx_hash)            # Transaction hash
+print(receipt.amount)             # Amount paid
+print(receipt.confirmation_time_ms)  # Confirmation time in ms
+```
+
+Available for CONFIRMED and REFUNDED sessions.
+
+---
+
+### `get_wallet_balance()` -- Check wallet balance
+
+```python
+info = sdk.get_wallet_balance(session.session_id)
+print(f"Wallet:  {info['wallet_public_key']}")
+print(f"Balance: {info['sol_balance']} SOL")
+print(f"Network: {info['network']}")
+```
+
+Queries the real SOL balance on-chain via Solana RPC.
+
+---
+
+### Custom Metadata
+
+Attach arbitrary key-value pairs to any payment session. Metadata is stored
+server-side and returned in `check_status()`, `list_payments()`, and webhook events.
+
+```python
+session = sdk.create_payment(
+    amount=50.00,
+    order_id="pedido_123",
+    metadata={
+        "user_id": "u_42",
+        "sku": "NIKE-AM-001",
+        "discount_code": "HACKATHON10",
+    },
+)
+print(session.metadata)  # {"user_id": "u_42", "sku": "NIKE-AM-001", ...}
+```
+
+---
+
+### Idempotency Key
+
+Prevents duplicate charges on retry. Same key returns the original session.
 
 ```python
 for _ in range(2):
@@ -101,16 +183,16 @@ for _ in range(2):
         order_id="pedido_123",
         idempotency_key="pedido_123_attempt_1",
     )
-# session.session_id é o mesmo nas duas chamadas
+# session.session_id is identical in both calls
 ```
 
-Enviado como header HTTP: `Idempotency-Key: pedido_123_attempt_1`
+Sent as HTTP header: `Idempotency-Key: pedido_123_attempt_1`
 
 ---
 
-### ✅ Verificação de Assinatura de Webhook
+### Webhook Signature Verification
 
-Garante que o payload veio do servidor SolanaEasy (proteção contra replay attacks e spoofing).
+Ensures payload authenticity via HMAC-SHA256 with timestamp protection.
 
 ```python
 sdk = SolanaEasy(api_key="sk_...", webhook_secret="whsec_...")
@@ -127,24 +209,20 @@ def handle_webhook(request):
         return 400
 ```
 
-**Algoritmo:** HMAC-SHA256 com timestamp (previne replay attacks de até 5 min)
+**Algorithm:** HMAC-SHA256 with timestamp (rejects replays older than 5 min)
 **Header:** `X-SolanaEasy-Signature: t=1234567890,v1=abc123...`
 
 ---
 
-### ✅ `@sdk.on()` — Decorator de Webhook
-
-Forma declarativa de registrar handlers para eventos específicos.
+### `@sdk.on()` -- Webhook Event Decorator
 
 ```python
-sdk = SolanaEasy(api_key="sk_...", webhook_secret="whsec_...")
-
 @sdk.on("payment.confirmed")
-def pagamento_confirmado(event: WebhookEvent):
+def on_confirmed(event: WebhookEvent):
     fulfill_order(event.session_id)
 
 @sdk.on("payment.failed")
-def pagamento_falhou(event: WebhookEvent):
+def on_failed(event: WebhookEvent):
     notify_customer(event.session_id, event.data.human_message)
 
 @app.post("/webhook/solana")
@@ -158,14 +236,14 @@ def webhook_endpoint(request):
 
 ---
 
-### ✅ `AsyncSolanaEasy` — Cliente Assíncrono
+### `AsyncSolanaEasy` -- Async Client
 
-Mesma interface do `SolanaEasy`, mas com `async/await`. Ideal para FastAPI.
+Same interface as `SolanaEasy`, but with `async/await`. Ideal for FastAPI.
 
 ```python
 from solanaeasy import AsyncSolanaEasy
 
-async def processar_pedido():
+async def process_order():
     async with AsyncSolanaEasy(api_key="sk_...") as sdk:
         session = await sdk.create_payment(amount=50.00, order_id="pedido_123")
         status = await sdk.wait_for_confirmation(session.session_id, timeout=120)
@@ -174,80 +252,83 @@ async def processar_pedido():
 
 ---
 
-### ✅ CLI — Interface de Linha de Comando
+### CLI -- Command Line Interface
 
 ```bash
-# Verificar status de um pagamento
+# Check payment status
 $ solanaeasy status sess_abc123
 
-# Listar pagamentos recentes
+# List recent payments
 $ solanaeasy payments --limit 5
 $ solanaeasy payments --status CONFIRMED
 
-# Aguardar confirmação em tempo real (polling visual)
+# Wait for confirmation in real-time
 $ solanaeasy wait sess_abc123
 
-# Ajuda
+# Help
 $ solanaeasy --help
 ```
 
 ---
 
-## Modelos de Dados
+## Data Models
 
 ### `PaymentSession`
-| Campo | Tipo | Descrição |
+| Field | Type | Description |
 |---|---|---|
-| `session_id` | `str` | ID único da sessão |
-| `payment_url` | `str` | URL para o cliente pagar |
-| `amount` | `float` | Valor cobrado (> 0) |
-| `currency` | `str` | Moeda (padrão: USDC) |
-| `order_id` | `str` | ID do pedido no sistema do lojista |
-| `description` | `str` | Descrição do produto |
-| `state` | `PaymentState` | Estado atual |
-| `created_at` | `datetime` | Data de criação |
-| `expires_at` | `datetime` | Data de expiração |
-| `is_confirmed` | `bool` (property) | Atalho: state == CONFIRMED |
-| `is_expired` | `bool` (property) | Atalho: passou do expires_at |
+| `session_id` | `str` | Unique session ID |
+| `payment_url` | `str` | URL for customer to pay |
+| `amount` | `float` | Amount charged (> 0) |
+| `currency` | `str` | Currency (default: USDC) |
+| `order_id` | `str` | Merchant's order ID |
+| `description` | `str` | Product description |
+| `state` | `PaymentState` | Current state |
+| `wallet_public_key` | `str or None` | Solana deposit address |
+| `metadata` | `dict or None` | Custom merchant metadata |
+| `created_at` | `datetime` | Creation timestamp |
+| `expires_at` | `datetime` | Expiration timestamp |
+| `is_confirmed` | `bool` (property) | Shortcut: state == CONFIRMED |
+| `is_expired` | `bool` (property) | Shortcut: now > expires_at |
 
 ### `PaymentStatus`
-| Campo | Tipo | Descrição |
+| Field | Type | Description |
 |---|---|---|
-| `session_id` | `str` | ID da sessão |
-| `state` | `PaymentState` | Estado atual |
-| `human_message` | `str` | Mensagem legível |
-| `tx_hash` | `str or None` | Hash Solana (se confirmado) |
-| `confirmed_at` | `datetime or None` | Timestamp da confirmação |
-| `confirmation_time_ms` | `int or None` | Tempo de confirmação em ms |
-| `error_code` | `str or None` | Código do erro on-chain (se falhou) |
+| `session_id` | `str` | Session ID |
+| `state` | `PaymentState` | Current state |
+| `human_message` | `str` | Human-readable message |
+| `wallet_public_key` | `str or None` | Solana deposit address |
+| `tx_hash` | `str or None` | Solana tx hash (if confirmed) |
+| `confirmed_at` | `datetime or None` | Confirmation timestamp |
+| `confirmation_time_ms` | `int or None` | Confirmation time in ms |
+| `error_code` | `str or None` | On-chain error code (if failed) |
 
 ---
 
-## Exceções
+## Payment States
 
-| Exceção | Quando ocorre |
+```
+CREATED     Session created, waiting for customer
+PENDING     Customer initiated payment, awaiting network confirmation
+CONFIRMED   Transaction finalized on-chain
+FAILED      Transaction rejected
+EXPIRED     Session timed out without payment
+CANCELLED   Session cancelled by merchant before payment
+REFUNDED    Confirmed payment refunded by merchant
+```
+
+---
+
+## Exceptions
+
+| Exception | When |
 |---|---|
-| `SolanaEasyError` | Base de todos os erros |
-| `AuthenticationError` | API key inválida ou ausente |
-| `PaymentError` | Erro genérico no fluxo de pagamento |
-| `InsufficientFunds` | Saldo insuficiente na carteira do cliente |
-| `TransactionExpired` | Blockhash expirou antes de confirmar |
-| `NetworkCongestion` | Rede Solana congestionada |
-| `SessionNotFoundError` | session_id não encontrado |
-| `WebhookError` | Assinatura inválida ou falha no webhook |
-| `RateLimitError` | Muitas requisições (tem `.retry_after`) |
-| `WaitTimeout` | `wait_for_confirmation()` atingiu o timeout (tem `.last_status`) |
-
----
-
-## Roadmap
-
-### Fase 3 — Motor Solana (próxima)
-- [ ] `_internal/solana/wallet.py` — geração de keypairs temporários por sessão
-- [ ] `_internal/solana/rpc.py` — monitorar transações via WebSocket RPC
-- [ ] `_internal/solana/tx_builder.py` — construção de transferências USDC
-
-### Fase 4 — Polish
-- [ ] `refund(session_id)` — estorno on-chain
-- [ ] `_internal/translator.py` — mapeamento completo de erros Solana → linguagem humana
-- [ ] Publicação no PyPI
+| `SolanaEasyError` | Base for all errors |
+| `AuthenticationError` | Invalid or missing API key |
+| `PaymentError` | Generic payment flow error |
+| `InsufficientFunds` | Customer wallet has insufficient balance |
+| `TransactionExpired` | Blockhash expired before confirmation |
+| `NetworkCongestion` | Solana network congested |
+| `SessionNotFoundError` | session_id not found |
+| `WebhookError` | Invalid signature or webhook failure |
+| `RateLimitError` | Too many requests (has `.retry_after`) |
+| `WaitTimeout` | `wait_for_confirmation()` timed out (has `.last_status`) |

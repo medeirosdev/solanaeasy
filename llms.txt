@@ -58,11 +58,13 @@ sdk.create_payment(
     description: str = "",
     expires_in: int = 900,             # seconds until expiry, default 15 min
     idempotency_key: str | None = None,
+    metadata: dict[str, str] | None = None,  # custom merchant metadata
 ) -> PaymentSession
 ```
 
 Sends Idempotency-Key header when idempotency_key is provided.
 Same key on repeated calls returns the original session without creating a new charge.
+Metadata is stored server-side and returned in check_status() and webhooks.
 
 ### check_status
 
@@ -147,7 +149,35 @@ Valid event_type values: "payment.confirmed", "payment.failed",
 sdk.refund(session_id: str) -> PaymentStatus
 ```
 
-Currently raises NotImplementedError. Planned for Phase 4.
+Initiates a refund for a CONFIRMED session. Returns PaymentStatus with state "REFUNDED".
+Raises HTTP 409 if the session is not in CONFIRMED state.
+
+### cancel_session
+
+```python
+sdk.cancel_session(session_id: str) -> PaymentStatus
+```
+
+Cancels a session in CREATED or PENDING state. Returns PaymentStatus with state "CANCELLED".
+Raises HTTP 409 if the session has already been confirmed, failed, or expired.
+
+### get_receipt
+
+```python
+sdk.get_receipt(session_id: str) -> PaymentReceipt
+```
+
+Returns a formatted receipt for a CONFIRMED or REFUNDED session.
+Includes Solana Explorer URL, transaction hash, amounts, and timestamps.
+
+### get_wallet_balance
+
+```python
+sdk.get_wallet_balance(session_id: str) -> dict[str, Any]
+```
+
+Returns {"wallet_public_key": str, "sol_balance": float, "network": str}.
+Queries the real SOL balance on-chain for the wallet generated for this session.
 
 ### close / context manager
 
@@ -174,6 +204,8 @@ currency: str  (default "USDC")
 order_id: str
 description: str
 state: PaymentState
+wallet_public_key: str | None  (Solana deposit address)
+metadata: dict[str, str] | None  (custom merchant metadata)
 created_at: datetime
 expires_at: datetime
 is_confirmed: bool  (property, state == "CONFIRMED")
@@ -186,6 +218,7 @@ is_expired: bool    (property, now > expires_at)
 session_id: str
 state: PaymentState
 human_message: str
+wallet_public_key: str | None  (Solana deposit address)
 tx_hash: str | None          (set when CONFIRMED)
 confirmed_at: datetime | None
 confirmation_time_ms: int | None
@@ -221,7 +254,7 @@ explorer_url: str
 ## Type aliases
 
 ```python
-PaymentState = Literal["CREATED", "PENDING", "CONFIRMED", "FAILED", "EXPIRED"]
+PaymentState = Literal["CREATED", "PENDING", "CONFIRMED", "FAILED", "EXPIRED", "CANCELLED", "REFUNDED"]
 
 WebhookEventType = Literal[
     "payment.confirmed",
@@ -235,9 +268,11 @@ WebhookEventType = Literal[
 ## State machine
 
 ```
-CREATED -> PENDING -> CONFIRMED
+CREATED -> PENDING -> CONFIRMED -> REFUNDED (via sdk.refund())
                    -> FAILED
                    -> EXPIRED  (after expires_in seconds, default 900)
+CREATED -> CANCELLED (via sdk.cancel_session())
+PENDING -> CANCELLED (via sdk.cancel_session())
 ```
 
 CREATED: session exists, customer has not yet opened the payment URL
@@ -245,6 +280,8 @@ PENDING: customer opened the URL, transaction submitted to Solana
 CONFIRMED: transaction finalized on-chain
 FAILED: transaction rejected (insufficient funds, expired blockhash, etc.)
 EXPIRED: session timeout reached with no payment
+CANCELLED: merchant cancelled the session before payment
+REFUNDED: merchant refunded a confirmed payment
 
 
 ## Exception hierarchy
