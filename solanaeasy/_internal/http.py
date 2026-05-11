@@ -116,7 +116,9 @@ class HttpClient:
         # Retry em erros de servidor transitórios
         if response.status_code in _RETRY_STATUSES and attempt <= _MAX_RETRIES:
             self._wait_before_retry(attempt)
-            return self._request(method, path, params, json, attempt + 1)
+            return self._request(
+                method, path, params=params, json=json, extra_headers=extra_headers, attempt=attempt + 1
+            )
 
         return self._handle_response(response)
 
