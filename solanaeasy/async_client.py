@@ -30,8 +30,9 @@ from solanaeasy.models import PaymentReceipt, PaymentSession, PaymentState, Paym
 load_dotenv()
 
 _DEFAULT_BASE_URL = "https://api.solanaeasy.dev"
-_DEVNET_BASE_URL = "http://localhost:8000"
-_VALID_NETWORKS = {"devnet", "mainnet-beta"}
+_DEVNET_BASE_URL = "https://api.devnet.solanaeasy.dev"
+_LOCAL_BASE_URL = "http://localhost:8000"
+_VALID_NETWORKS = {"devnet", "mainnet-beta", "local"}
 _TERMINAL_STATES: set[PaymentState] = {"CONFIRMED", "FAILED", "EXPIRED"}
 
 
@@ -69,11 +70,15 @@ class AsyncSolanaEasy:
         resolved_network = network or os.getenv("SOLANAEASY_NETWORK", "devnet")
         if resolved_network not in _VALID_NETWORKS:
             raise SolanaEasyError(
-                f"Rede inválida: '{resolved_network}'. Use 'devnet' ou 'mainnet-beta'.",
+                f"Rede inválida: '{resolved_network}'. Use 'devnet', 'mainnet-beta' ou 'local'.",
                 code="INVALID_NETWORK",
             )
 
-        default_url = _DEVNET_BASE_URL if resolved_network == "devnet" else _DEFAULT_BASE_URL
+        if resolved_network == "local":
+            default_url = _LOCAL_BASE_URL
+        else:
+            default_url = _DEVNET_BASE_URL if resolved_network == "devnet" else _DEFAULT_BASE_URL
+
         resolved_url = base_url or os.getenv("SOLANAEASY_BASE_URL") or default_url
 
         self._api_key = resolved_key
@@ -98,11 +103,25 @@ class AsyncSolanaEasy:
         idempotency_key: str | None = None,
         metadata: dict[str, str] | None = None,
     ) -> PaymentSession:
-        """Cria uma nova sessao de pagamento. Veja SolanaEasy.create_payment() para documentacao."""
+        """
+        Cria uma nova sessão de pagamento de forma assíncrona.
+
+        Parâmetros:
+            amount:           Valor a cobrar (ex: 50.00), deve ser > 0.
+            order_id:         ID do pedido no seu sistema.
+            currency:         Moeda — USDC por padrão (stablecoin).
+            description:      Descrição do produto/serviço (aparece no recibo).
+            expires_in:       Segundos até a sessão expirar (padrão: 900 = 15 min).
+            idempotency_key:  Chave única para evitar cobrança dupla em retries.
+            metadata:         Dicionário de metadados customizados.
+
+        Retorna:
+            PaymentSession com session_id e payment_url.
+        """
         if amount <= 0:
             raise SolanaEasyError("O valor deve ser maior que zero.", code="INVALID_AMOUNT")
         if not order_id.strip():
-            raise SolanaEasyError("order_id nao pode ser vazio.", code="INVALID_ORDER_ID")
+            raise SolanaEasyError("order_id não pode ser vazio.", code="INVALID_ORDER_ID")
 
         extra_headers = {}
         if idempotency_key:
@@ -126,7 +145,15 @@ class AsyncSolanaEasy:
         return PaymentSession(**data)
 
     async def check_status(self, session_id: str) -> PaymentStatus:
-        """Verifica o status atual de uma sessão. Veja SolanaEasy.check_status()."""
+        """
+        Verifica o status atual de uma sessão de pagamento de forma assíncrona.
+
+        Parâmetros:
+            session_id: ID da sessão retornado por create_payment().
+
+        Retorna:
+            PaymentStatus com state e human_message.
+        """
         if not session_id.strip():
             raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
         data = await self._http.get(f"/sessions/{session_id}")
@@ -140,9 +167,15 @@ class AsyncSolanaEasy:
         on_update: Callable[[PaymentStatus], Any] | None = None,
     ) -> PaymentStatus:
         """
-        Aguarda assincronamente até o pagamento atingir um estado terminal.
+        Bloqueia (via async) até o pagamento atingir um estado terminal.
 
         Não bloqueia o event loop — usa asyncio.sleep() internamente.
+
+        Parâmetros:
+            session_id:    ID da sessão a monitorar.
+            timeout:       Segundos máximos de espera (padrão: 120).
+            poll_interval: Intervalo entre verificações em segundos.
+            on_update:     Callback opcional (sync ou async) chamado a cada mudança.
 
         Exemplo:
             status = await sdk.wait_for_confirmation(
@@ -151,7 +184,7 @@ class AsyncSolanaEasy:
                 on_update=lambda s: print(f"Estado: {s.state}"),
             )
         """
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         last_status = await self.check_status(session_id)
 
         if on_update:
@@ -160,7 +193,7 @@ class AsyncSolanaEasy:
                 await result
 
         while last_status.state not in _TERMINAL_STATES:
-            if asyncio.get_event_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= deadline:
                 raise WaitTimeout(
                     session_id=session_id,
                     last_status=last_status,
@@ -184,7 +217,14 @@ class AsyncSolanaEasy:
         limit: int = 20,
         offset: int = 0,
     ) -> list[PaymentSession]:
-        """Lista os pagamentos do lojista. Veja SolanaEasy.list_payments()."""
+        """
+        Lista os pagamentos do lojista com filtros opcionais de forma assíncrona.
+
+        Parâmetros:
+            status: Filtrar por estado ("CONFIRMED", "PENDING", etc.)
+            limit:  Máximo de resultados (padrão: 20)
+            offset: Paginação (padrão: 0)
+        """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
@@ -192,7 +232,12 @@ class AsyncSolanaEasy:
         return [PaymentSession(**item) for item in data.get("items", [])]
 
     async def register_webhook(self, url: str) -> bool:
-        """Registra URL de webhook. Veja SolanaEasy.register_webhook()."""
+        """
+        Registra uma URL para receber eventos de pagamento em tempo real de forma assíncrona.
+
+        Parâmetros:
+            url: URL HTTPS do seu endpoint.
+        """
         if not url.startswith(("http://", "https://")):
             raise SolanaEasyError(
                 "URL do webhook deve começar com http:// ou https://",
@@ -202,30 +247,62 @@ class AsyncSolanaEasy:
         return True
 
     async def refund(self, session_id: str) -> PaymentStatus:
-        """Initiate a refund for a CONFIRMED session. See SolanaEasy.refund()."""
+        """
+        Inicia o processo de estorno de um pagamento confirmado.
+
+        Parâmetros:
+            session_id: ID da sessão confirmada.
+
+        Retorna:
+            PaymentStatus com state == "REFUNDED".
+        """
         if not session_id.strip():
-            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
         data = await self._http.post(f"/sessions/{session_id}/refund")
         return PaymentStatus(**data)
 
     async def cancel_session(self, session_id: str) -> PaymentStatus:
-        """Cancel a session in CREATED or PENDING state. See SolanaEasy.cancel_session()."""
+        """
+        Cancela uma sessão de pagamento antes que o cliente pague.
+
+        Parâmetros:
+            session_id: ID da sessão a cancelar.
+
+        Retorna:
+            PaymentStatus com state == "CANCELLED".
+        """
         if not session_id.strip():
-            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
         data = await self._http.post(f"/sessions/{session_id}/cancel")
         return PaymentStatus(**data)
 
     async def get_receipt(self, session_id: str) -> PaymentReceipt:
-        """Get a formatted receipt for a CONFIRMED session. See SolanaEasy.get_receipt()."""
+        """
+        Obtém o recibo detalhado de um pagamento confirmado.
+
+        Parâmetros:
+            session_id: ID da sessão confirmada.
+
+        Retorna:
+            PaymentReceipt com todos os dados da transação.
+        """
         if not session_id.strip():
-            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
         data = await self._http.get(f"/sessions/{session_id}/receipt")
         return PaymentReceipt(**data)
 
     async def get_wallet_balance(self, session_id: str) -> dict[str, Any]:
-        """Check SOL balance of the session wallet. See SolanaEasy.get_wallet_balance()."""
+        """
+        Consulta o saldo atual da carteira Solana gerada para uma sessão.
+
+        Parâmetros:
+            session_id: ID da sessão.
+
+        Retorna:
+            Dicionário com wallet_public_key, sol_balance e network.
+        """
         if not session_id.strip():
-            raise SolanaEasyError("session_id nao pode ser vazio.", code="INVALID_SESSION_ID")
+            raise SolanaEasyError("session_id não pode ser vazio.", code="INVALID_SESSION_ID")
         return await self._http.get(f"/sessions/{session_id}/balance")
 
     # ── Webhooks ───────────────────────────────────────────────────────────────
