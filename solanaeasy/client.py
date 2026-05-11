@@ -29,8 +29,9 @@ from solanaeasy.models import PaymentReceipt, PaymentSession, PaymentState, Paym
 load_dotenv()
 
 _DEFAULT_BASE_URL = "https://api.solanaeasy.dev"
-_DEVNET_BASE_URL = "http://localhost:8000"
-_VALID_NETWORKS = {"devnet", "mainnet-beta"}
+_DEVNET_BASE_URL = "https://api.devnet.solanaeasy.dev"
+_LOCAL_BASE_URL = "http://localhost:8000"
+_VALID_NETWORKS = {"devnet", "mainnet-beta", "local"}
 _TERMINAL_STATES: set[PaymentState] = {"CONFIRMED", "FAILED", "EXPIRED"}
 
 
@@ -72,11 +73,15 @@ class SolanaEasy:
         resolved_network = network or os.getenv("SOLANAEASY_NETWORK", "devnet")
         if resolved_network not in _VALID_NETWORKS:
             raise SolanaEasyError(
-                f"Rede inválida: '{resolved_network}'. Use 'devnet' ou 'mainnet-beta'.",
+                f"Rede inválida: '{resolved_network}'. Use 'devnet', 'mainnet-beta' ou 'local'.",
                 code="INVALID_NETWORK",
             )
 
-        default_url = _DEVNET_BASE_URL if resolved_network == "devnet" else _DEFAULT_BASE_URL
+        if resolved_network == "local":
+            default_url = _LOCAL_BASE_URL
+        else:
+            default_url = _DEVNET_BASE_URL if resolved_network == "devnet" else _DEFAULT_BASE_URL
+
         resolved_url = base_url or os.getenv("SOLANAEASY_BASE_URL") or default_url
 
         self._api_key = resolved_key
